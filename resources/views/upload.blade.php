@@ -70,10 +70,7 @@
 <body>
 
 <div class="container">
-    <a href="https://suhosting.net/" target="_blank">
-        <img src="/logo.png" alt="Logo" class="logo"> <!-- Logo links to https://suhosting.net/ -->
-    </a>
-    <h2>Enshrouded Log Upload</h2>
+    <h2>Enshrouded Log Parser Upload</h2>
     <form id="upload-form" method="POST" action="/upload" enctype="multipart/form-data">
         @csrf
         <div id="drop-text">

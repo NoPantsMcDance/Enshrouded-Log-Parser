@@ -64,14 +64,11 @@ public function parse($file)
     $vulkanLayerRegex = '/\[graphics\] Found vulkan instance layer \'(.*?)\'/';
     $gameVersionRegex = '/\[I \d{2}:\d{2}:\d{2},\d{3}\] Game Version \(SVN\): (\d+)/';
     $vulkanInstaceRegex = '/\[graphics\] Vulkan instance version (.*) \(variant (.*)\)/';
-    $fatalRegex = '/\[X \d{2}:\d{2}:\d{2},\d{3}\] (.*)/';
-    $errorRegex = '/\[E \d{2}:\d{2}:\d{2},\d{3}\] (.*)/';
+    $errorRegex = '/\[(?:X|E) \d{2}:\d{2}:\d{2},\d{3}\] (.*)/';    
     $vulkanDeviceRegex = '/\[I \d{2}:\d{2}:\d{2},\d{3}\] \[graphics\] Vulkan device (\d+) \((.*)\)/';
     $apiVersionRegex = '/\[I \d{2}:\d{2}:\d{2},\d{3}\] \[graphics\] - api version   : (.*)/';
     $skippingDeviceRegex = '/\[I \d{2}:\d{2}:\d{2},\d{3}\] \[graphics\] skipping device because it does not support extension \'(.*?)\'!/';
-
-
-
+    $asciiArtRegex = '/^\[.*?\]\s*(.*)$/m';
 
     $systemSpecs = [];
     $vulkanInfo = [];
@@ -79,14 +76,35 @@ public function parse($file)
     $gameInfo = [];
     $lineCounts = [];
 
+    if (!preg_match_all($asciiArtRegex, $content, $matches)) {
+        return view('errors.noascii', ['message' => 'Unable to verify full log content. Please ensure this is a complete log file']);
+    }
 
-
-    foreach ([$cpuInfoRegex, $memoryInfoRegex, $osSystemInfoRegex] as $regex) {
+    foreach ([$cpuInfoRegex, $osSystemInfoRegex] as $regex) {
         if (preg_match($regex, $content, $matches)) {
             $lines = explode("\n", trim($matches[2]));
             $systemSpecs[] = $matches[1];
             foreach ($lines as $line) {
                 if (preg_match('/\[\w \d{2}:\d{2}:\d{2},\d{3}\]\s*(.*):\s*(.*)/', $line, $lineMatches)) {
+                    $systemSpecs[] = "\t" . $lineMatches[1] . ": " . $lineMatches[2];
+                }
+            }
+        }
+    }
+
+    if (preg_match($memoryInfoRegex, $content, $matches)) {
+        $lines = explode("\n", trim($matches[2]));
+        $systemSpecs[] = $matches[1];
+        foreach ($lines as $line) {
+            if (preg_match('/\[\w \d{2}:\d{2}:\d{2},\d{3}\]\s*(.*):\s*(.*)/', $line, $lineMatches)) {
+                // Remove commas from the value
+                $value = str_replace(',', '', $lineMatches[2]);
+                // Check if the value is numeric
+                if (is_numeric($value)) {
+                    $valueInGB = round($value / (1024 * 1024 * 1024), 2);
+                    $systemSpecs[] = "\t" . $lineMatches[1] . ": " . $valueInGB . " GB";
+                } else {
+                    // If the value is not numeric, add it to the array as is
                     $systemSpecs[] = "\t" . $lineMatches[1] . ": " . $lineMatches[2];
                 }
             }
@@ -109,9 +127,9 @@ public function parse($file)
     }
 
     if (preg_match($vramInfoRegex, $content, $match)) {
-        $systemSpecs[] = "\t" . "Heap 0 Size: " . $match[1];
-        $systemSpecs[] = "\t" . "Heap 0 BudgetBytes: " . $match[2];
-        $systemSpecs[] = "\t" . "Heap 0 UsageBytes: " . $match[3];
+        $systemSpecs[] = "\t" . "Heap 0 Size: " . round($match[1] / (1024 * 1024 * 1024), 2) . " GB";
+        $systemSpecs[] = "\t" . "Heap 0 BudgetBytes: " . round($match[2] / (1024 * 1024 * 1024), 2) . " GB";
+        $systemSpecs[] = "\t" . "Heap 0 UsageBytes: " . round($match[3] / (1024 * 1024 * 1024), 2) . " GB";
     }
 
     if (preg_match($vulkanInstaceRegex, $content, $matches)) {
@@ -127,29 +145,41 @@ public function parse($file)
         }
     }
 
+    // Match Vulkan devices
     if (preg_match_all($vulkanDeviceRegex, $content, $matches, PREG_SET_ORDER)) {
-        $vulkanInfo[] = "Vulkan Devices:";
         foreach ($matches as $match) {
-            $vulkanInfo[] = "\tDevice " . $match[1] . ": " . $match[2];
+            // Store the device name and initialize its API version to an empty string
+            $vulkanDevices[$match[1]] = ['name' => $match[2], 'apiVersion' => ''];
         }
     }
 
+    // Match API versions
     if (preg_match_all($apiVersionRegex, $content, $matches, PREG_SET_ORDER)) {
         foreach ($matches as $match) {
-            $vulkanInfo[] = "\t" . "API Version: " . $match[1];
+            // Assign the API version to the corresponding device
+            foreach ($vulkanDevices as $deviceNumber => $deviceInfo) {
+                if (empty($deviceInfo['apiVersion'])) {
+                    $vulkanDevices[$deviceNumber]['apiVersion'] = $match[1];
+                    break;
+                }
+            }
         }
+    }
+
+    // Display Vulkan devices and their API versions
+    $vulkanInfo[] = "Vulkan Devices:";
+    if (isset($vulkanDevices) && is_array($vulkanDevices)) {
+        foreach ($vulkanDevices as $deviceNumber => $deviceInfo) {
+            $vulkanInfo[] = "\tDevice " . $deviceNumber . ": " . $deviceInfo['name'];
+            $vulkanInfo[] = "\t    API Version: " . $deviceInfo['apiVersion'];
+        }
+    } else {
+        // Handle error here
+        $vulkanInfo[] = "\tNo Vulkan devices found or the variable is not set.";
     }
 
     if (preg_match($gameVersionRegex, $content, $match)) {
         $gameInfo['version'] = $match[1];
-    }
-
-    if (preg_match_all($fatalRegex, $content, $matches, PREG_SET_ORDER)) {
-        foreach ($matches as $match) {
-            if (!in_array($match[1], $errors)) {
-                $errors[] = $match[1];
-            }
-        }
     }
 
     if (preg_match_all($errorRegex, $content, $matches, PREG_SET_ORDER)) {
